@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ricerca Film e Serie - Archivio Premium</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/lucide-static@latest/dist/lucide.min.js"></script>
+    <!-- Firebase App (Core) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" }; // Fallback basic config
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        setLogLevel('debug'); // Remove in production
+
+        window.firebaseInstances = { app, auth, db }; // Make instances globally available for other script parts
+
+        // Handle Authentication
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                console.log("User is signed in:", user.uid);
+                window.currentUserId = user.uid;
+                // Dispatch event to notify other parts of the app that auth is ready
+                document.dispatchEvent(new CustomEvent('authReady', { detail: { userId: user.uid } }));
+            } else {
+                console.log("User is signed out or auth token not available yet.");
+                 // Try to sign in with custom token if available, otherwise anonymously
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    try {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                        console.log("Signed in with custom token.");
+                    } catch (error) {
+                        console.error("Error signing in with custom token, trying anonymous:", error);
+                        await signInAnonymously(auth);
+                    }
+                } else {
+                    console.log("No custom token, signing in anonymously.");
+                    await signInAnonymously(auth);
+                }
+            }
+        });
+    </script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0b0b0b; color: #e5e5e5; overflow-x: hidden; }
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: #1f1f1f; }
+        ::-webkit-scrollbar-thumb { background: #e50914; border-radius: 5px; border: 2px solid #1f1f1f; }
+        ::-webkit-scrollbar-thumb:hover { background: #f40612; }
+
+        .hero-section { height: 70vh; min-height: 450px; background-size: cover; background-position: center 30%; position: relative; display: flex; align-items: flex-end; padding-bottom: 8vh; box-shadow: inset 0 -150px 100px -50px #0b0b0b; }
+        .hero-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(to top, rgba(11,11,11,1) 10%, rgba(11,11,11,0.7) 30%, rgba(11,11,11,0.2) 60%, rgba(11,11,11,0) 100%); }
+        .hero-content { position: relative; z-index: 10; max-width: 50%; padding-left: 4vw; }
+        .hero-title { font-size: clamp(1.8rem, 4.5vw, 3.2rem); font-weight: 800; text-shadow: 0 0 15px rgba(0,0,0,0.7); }
+        .hero-overview { font-size: clamp(0.8rem, 1.4vw, 1rem); font-weight: 400; line-height: 1.6; max-height: 100px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; text-shadow: 0 0 10px rgba(0,0,0,0.5); margin-top: 0.8rem; }
+        .hero-actions button { margin-top: 1.2rem; }
+
+        .result-card { background-color: #181818; border-radius: 6px; overflow: hidden; box-shadow: 0 5px 15px rgba(0,0,0,0.3); transition: transform 0.3s ease, box-shadow 0.3s ease; position: relative; }
+        .result-card:hover { transform: scale(1.03); box-shadow: 0 8px 20px rgba(229,9,20,0.25); }
+        .card-poster-img { width: 100%; height: auto; object-fit: cover; aspect-ratio: 2/3; display: block; }
+        .card-info { padding: 10px; }
+        .card-title { font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .card-type { font-size: 0.7rem; color: #a0a0a0; text-transform: capitalize; }
+        .card-quick-actions { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(24,24,24,0.98) 40%, transparent); padding: 15px 10px 10px; opacity: 0; transform: translateY(15px); transition: opacity 0.3s ease, transform 0.3s ease; display: flex; justify-content: space-around; align-items: center; }
+        .result-card:hover .card-quick-actions { opacity: 1; transform: translateY(0); }
+        .card-action-btn { background-color: rgba(50,50,50,0.7); backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.15); color: white; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s ease, transform 0.2s ease; }
+        .card-action-btn:hover { background-color: #e50914; border-color: #e50914; transform: scale(1.1); }
+        .card-action-btn i { width: 16px; height: 16px; }
+
+        .skeleton-card { background-color: #181818; border-radius: 6px; overflow: hidden; }
+        .skeleton-poster { width: 100%; aspect-ratio: 2/3; background: linear-gradient(110deg, #222 8%, #282828 18%, #222 33%); background-size: 200% 100%; animation: 1.5s shine linear infinite; }
+        .skeleton-text { height: 1em; margin-top: 8px; border-radius: 3px; background: linear-gradient(110deg, #222 8%, #282828 18%, #222 33%); background-size: 200% 100%; animation: 1.5s shine linear infinite; }
+        @keyframes shine { to { background-position-x: -200%; } }
+
+        .player-backdrop-blur { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; background-size: cover; background-position: center; filter: blur(20px) brightness(0.4); opacity: 0; transition: opacity 0.5s ease-in-out; }
+        .player-backdrop-blur.active { opacity: 1; }
+        .player-container { box-shadow: 0 0 40px rgba(229,9,20,0.5); }
+
+        .results-grid > .result-card { opacity: 0; transform: translateY(20px); animation: itemFadeIn 0.5s ease-out forwards; }
+        @keyframes itemFadeIn { to { opacity: 1; transform: translateY(0); } }
+
+        .btn { font-weight: 600; padding: 0.55rem 1.2rem; border-radius: 4px; transition: background-color 0.2s ease; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+        .btn-primary { background-color: #e50914; color: white; } .btn-primary:hover { background-color: #f40612; }
+        .btn-secondary { background-color: rgba(109, 109, 110, 0.7); color: white; } .btn-secondary:hover { background-color: rgba(109, 109, 110, 0.4); }
+        .btn-archive { background-color: #3e92cc; color: white; } .btn-archive:hover { background-color: #2a628f; }
+        .btn-remove-archive { background-color: #d9534f; color: white; } .btn-remove-archive:hover { background-color: #c9302c; }
+
+
+        .season-btn, .episode-btn { background-color: #2a2a2a; border: 1px solid #444; color: #ccc; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; font-size: 0.85rem; padding: 0.4rem 0.8rem; }
+        .season-btn.active, .episode-btn.active { background-color: #e50914 !important; color: #fff !important; border-color: #e50914 !important; }
+        .season-btn:hover:not(.active), .episode-btn:hover:not(.active) { background-color: #404040; border-color: #666; color: #fff; }
+        .fade-in-content { animation: fadeInAnimation 0.7s ease-in-out; }
+        @keyframes fadeInAnimation { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Tab navigation */
+        .tab-nav button { background-color: transparent; color: #a0a0a0; padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; transition: color 0.3s ease, border-color 0.3s ease; font-weight: 500;}
+        .tab-nav button.active { color: #e50914; border-bottom-color: #e50914; font-weight: 600;}
+        .tab-nav button:hover:not(.active) { color: #fff; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Filters */
+        .filter-section { background-color: #181818; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;}
+        .filter-section label { display: block; margin-bottom: 0.3rem; font-size: 0.8rem; color: #bbb;}
+        .filter-section input, .filter-section select {
+            width: 100%; background-color: #222; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.5rem; font-size: 0.9rem; margin-bottom: 0.75rem;
+        }
+        .filter-section input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.8); }
+
+        /* Modal for messages */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s ease-in-out; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-content { background-color: #181818; padding: 2rem; border-radius: 8px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); transform: scale(0.9); transition: transform 0.3s ease-in-out; }
+        .modal-overlay.active .modal-content { transform: scale(1); }
+        .modal-content p { margin-bottom: 1.5rem; font-size: 1.1rem; }
+        .modal-content button { margin-top: 0.5rem; }
+
+    </style>
+</head>
+<body class="antialiased">
+
+    <div id="playerBackdrop" class="player-backdrop-blur"></div>
+
+    <header class="py-3 px-4 md:px-8 sticky top-0 z-50 bg-gradient-to-b from-black/95 via-black/80 to-transparent transition-all duration-300" id="appHeader">
+        <div class="container mx-auto flex justify-between items-center">
+            <a href="#" class="text-3xl md:text-4xl font-extrabold text-red-600 tracking-wider uppercase" onclick="window.location.reload(); return false;">FLIXDB</a>
+            <form id="searchFormOnline" class="flex">
+                <input type="text" id="searchQueryOnline" placeholder="Cerca online..." class="px-4 py-2.5 w-40 sm:w-52 md:w-72 bg-neutral-800/70 text-white border border-neutral-700 rounded-l-md focus:outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent placeholder-neutral-400 transition-all text-sm" required>
+                <button type="submit" class="btn bg-red-600 hover:bg-red-700 text-white font-semibold px-3 py-2.5 rounded-r-md transition-colors duration-300 flex items-center justify-center text-sm">
+                    <i data-lucide="search" class="w-4 h-4"></i>
+                </button>
+            </form>
+        </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-nav container mx-auto flex justify-center border-b border-neutral-700 my-4">
+        <button data-tab="onlineSearchTab" class="active">Ricerca Online</button>
+        <button data-tab="archiveTab">Il Mio Archivio</button>
+    </nav>
+
+    <main class="container mx-auto p-4 md:p-6 min-h-screen">
+        <!-- Online Search Tab Content -->
+        <div id="onlineSearchTab" class="tab-content active">
+            <section id="heroSection" class="hero-section mb-8" style="display:none;">
+                <div class="hero-overlay"></div>
+                <div class="hero-content">
+                    <h2 id="heroTitle" class="hero-title"></h2>
+                    <p id="heroOverview" class="hero-overview"></p>
+                    <div class="hero-actions">
+                        <button id="heroPlayButton" class="btn btn-primary"><i data-lucide="play" class="w-5 h-5"></i> Riproduci</button>
+                        <button id="heroMoreInfoButton" class="btn btn-secondary ml-3"><i data-lucide="info" class="w-5 h-5"></i> Più Info</button>
+                    </div>
+                </div>
+            </section>
+            <div id="resultsTitleOnline" class="text-2xl font-semibold mb-6 text-neutral-100" style="display:none;"></div>
+            <div id="resultsOnline" class="results-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-5"></div>
+            <div id="loadingIndicatorOnline" class="text-center py-10" style="display:none;"></div>
+            <div id="errorMessageOnline" class="text-center py-10 text-xl text-red-500" style="display:none;"></div>
+        </div>
+
+        <!-- Archive Tab Content -->
+        <div id="archiveTab" class="tab-content">
+            <h2 class="text-3xl font-bold mb-6 text-neutral-100">Il Mio Archivio</h2>
+            <!-- Filters for Archive -->
+            <section class="filter-section grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <div>
+                    <label for="filterArchiveTitle">Cerca per Titolo:</label>
+                    <input type="text" id="filterArchiveTitle" placeholder="Nome film/serie...">
+                </div>
+                <div>
+                    <label for="filterArchiveType">Tipo:</label>
+                    <select id="filterArchiveType">
+                        <option value="">Tutti</option>
+                        <option value="movie">Film</option>
+                        <option value="tv">Serie TV</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="filterArchiveGenre">Genere:</label>
+                    <select id="filterArchiveGenre">
+                        <option value="">Tutti</option>
+                        <!-- Genres will be populated by JS -->
+                    </select>
+                </div>
+                <div>
+                    <label for="filterArchiveRating">Valutazione Minima:</label>
+                    <select id="filterArchiveRating">
+                        <option value="">Tutte</option>
+                        <option value="9">9+</option>
+                        <option value="8">8+</option>
+                        <option value="7">7+</option>
+                        <option value="6">6+</option>
+                        <option value="5">5+</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="filterArchiveDateStart">Dal (Data Uscita):</label>
+                    <input type="date" id="filterArchiveDateStart">
+                </div>
+                <div>
+                    <label for="filterArchiveDateEnd">Al (Data Uscita):</label>
+                    <input type="date" id="filterArchiveDateEnd">
+                </div>
+                 <div class="sm:col-span-2 md:col-span-1 lg:col-span-2 flex items-end">
+                    <button id="applyArchiveFilters" class="btn btn-primary w-full sm:w-auto"><i data-lucide="filter"></i> Applica Filtri</button>
+                    <button id="resetArchiveFilters" class="btn btn-secondary ml-2 w-full sm:w-auto mt-2 sm:mt-0"><i data-lucide="rotate-ccw"></i> Reset</button>
+                </div>
+            </section>
+
+            <div id="resultsArchive" class="results-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-5 mt-6"></div>
+            <div id="loadingIndicatorArchive" class="text-center py-10" style="display:none;">Caricamento archivio...</div>
+            <div id="emptyArchiveMessage" class="text-center py-10 text-xl text-neutral-400" style="display:none;">Il tuo archivio è vuoto.</div>
+            <div id="noResultsArchiveMessage" class="text-center py-10 text-xl text-neutral-400" style="display:none;">Nessun elemento trovato con i filtri selezionati.</div>
+        </div>
+
+        <!-- Player Section (shared) -->
+        <div id="playerSection" class="mt-8 fade-in-content" style="display:none;">
+             <button id="backToView" class="mb-6 btn btn-secondary"><i data-lucide="arrow-left" class="w-5 h-5"></i> Torna Indietro</button>
+            <h2 id="videoTitle" class="text-3xl md:text-4xl font-bold mb-2 text-white"></h2>
+            <div class="flex items-center mb-1 text-sm text-neutral-400">
+                <span id="videoReleaseDate" class="mr-3"></span>
+                <span id="videoRating" class="flex items-center"><i data-lucide="star" class="w-4 h-4 text-yellow-400 mr-1"></i> <span></span></span>
+            </div>
+            <p id="videoOverview" class="text-neutral-300 mb-6 text-sm md:text-base max-w-3xl leading-relaxed"></p>
+            <div class="player-container aspect-video rounded-lg overflow-hidden shadow-2xl shadow-red-900/50 mb-6">
+                <div id="playerContainer" class="w-full h-full bg-black"></div>
+            </div>
+            <div id="seasonSelector" style="display:none;" class="mb-6">
+                <h3 class="text-xl font-semibold mb-3 text-neutral-200">Stagioni</h3>
+                <div class="seasons flex flex-wrap gap-2" id="seasons"></div>
+            </div>
+            <div id="episodeSelector" style="display:none;" class="mb-6">
+                <h3 class="text-xl font-semibold mb-3 text-neutral-200">Episodi</h3>
+                <div class="episodes flex flex-wrap gap-2" id="episodes"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="text-center py-10 mt-12 border-t border-neutral-800">
+        <p class="text-neutral-500 text-sm">&copy; <span id="currentYear"></span> FlixDB. Dati da TMDB. Player Vixsrc.</p>
+        <p class="text-neutral-600 text-xs mt-1">Archivio Personale con Firebase.</p>
+    </footer>
+
+    <!-- Message Modal -->
+    <div id="messageModal" class="modal-overlay">
+        <div class="modal-content">
+            <p id="modalMessageText"></p>
+            <button id="modalCloseButton" class="btn btn-primary">OK</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import Firestore specific functions
+        import { doc, setDoc, getDoc, deleteDoc, collection, onSnapshot, query, where, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Ensure firebaseInstances are available
+        let db, auth;
+        if (window.firebaseInstances) {
+            db = window.firebaseInstances.db;
+            auth = window.firebaseInstances.auth;
+        } else {
+            console.error("Firebase non inizializzato correttamente!");
+            // Fallback or error display
+        }
+        
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        let userId = null; // Will be set by onAuthStateChanged
+
+        // --- DOM Elements (specific to this script block) ---
+        const resultsOnlineDiv = document.getElementById('resultsOnline');
+        const resultsTitleOnlineDiv = document.getElementById('resultsTitleOnline');
+        const loadingIndicatorOnline = document.getElementById('loadingIndicatorOnline');
+        const errorMessageOnline = document.getElementById('errorMessageOnline');
+        
+        const resultsArchiveDiv = document.getElementById('resultsArchive');
+        const loadingIndicatorArchive = document.getElementById('loadingIndicatorArchive');
+        const emptyArchiveMessage = document.getElementById('emptyArchiveMessage');
+        const noResultsArchiveMessage = document.getElementById('noResultsArchiveMessage');
+
+        const searchFormOnline = document.getElementById('searchFormOnline');
+        const searchQueryOnlineInput = document.getElementById('searchQueryOnline');
+        
+        const playerSection = document.getElementById('playerSection');
+        const playerContainer = document.getElementById('playerContainer');
+        const videoTitle = document.getElementById('videoTitle');
+        const videoOverview = document.getElementById('videoOverview');
+        const videoReleaseDate = document.getElementById('videoReleaseDate');
+        const videoRating = document.getElementById('videoRating').querySelector('span');
+        const seasonsDiv = document.getElementById('seasons');
+        const episodesDiv = document.getElementById('episodes');
+        const seasonSelector = document.getElementById('seasonSelector');
+        const episodeSelector = document.getElementById('episodeSelector');
+        const backToViewBtn = document.getElementById('backToView');
+
+        const heroSection = document.getElementById('heroSection');
+        const heroTitle = document.getElementById('heroTitle');
+        const heroOverview = document.getElementById('heroOverview');
+        const heroPlayButton = document.getElementById('heroPlayButton');
+        const heroMoreInfoButton = document.getElementById('heroMoreInfoButton');
+        const playerBackdrop = document.getElementById('playerBackdrop');
+
+        // Tab elements
+        const tabButtons = document.querySelectorAll('.tab-nav button');
+        const tabContents = document.querySelectorAll('.tab-content');
+        let activeTab = 'onlineSearchTab'; // To manage "back" button context
+
+        // Archive filter elements
+        const filterArchiveTitleInput = document.getElementById('filterArchiveTitle');
+        const filterArchiveTypeSelect = document.getElementById('filterArchiveType');
+        const filterArchiveGenreSelect = document.getElementById('filterArchiveGenre');
+        const filterArchiveRatingSelect = document.getElementById('filterArchiveRating');
+        const filterArchiveDateStartInput = document.getElementById('filterArchiveDateStart');
+        const filterArchiveDateEndInput = document.getElementById('filterArchiveDateEnd');
+        const applyArchiveFiltersBtn = document.getElementById('applyArchiveFilters');
+        const resetArchiveFiltersBtn = document.getElementById('resetArchiveFilters');
+        
+        // Modal elements
+        const messageModal = document.getElementById('messageModal');
+        const modalMessageText = document.getElementById('modalMessageText');
+        const modalCloseButton = document.getElementById('modalCloseButton');
+
+        // --- Global State ---
+        const apiKeyTmdb = '2e0b38cfb2936cec8ab1ce48e4335ac3';
+        let tvDataCacheOnline = null;
+        let currentHeroItem = null;
+        let localArchive = []; // Holds all items from user's archive for client-side filtering
+        let genreMap = {}; // To store TMDB genre IDs and names
+
+        // --- Utility Functions ---
+        function showModal(message) {
+            modalMessageText.textContent = message;
+            messageModal.classList.add('active');
+        }
+        modalCloseButton.addEventListener('click', () => messageModal.classList.remove('active'));
+
+        // --- Tab Navigation ---
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const tabId = button.dataset.tab;
+                activeTab = tabId;
+
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                button.classList.add('active');
+
+                tabContents.forEach(content => {
+                    content.classList.remove('active');
+                    if (content.id === tabId) {
+                        content.classList.add('active');
+                    }
+                });
+                // If switching to archive, load it if not already loaded or if empty
+                if (tabId === 'archiveTab' && localArchive.length === 0) {
+                    loadArchive();
+                }
+                hidePlayerShowActiveTab(); // Hide player if it was open
+            });
+        });
+
+        // --- Firestore Functions ---
+        async function addToArchive(mediaItem) {
+            if (!userId) { showModal("Devi essere autenticato per aggiungere elementi all'archivio."); return; }
+            if (!mediaItem || !mediaItem.tmdbId) { console.error("Media item o tmdbId mancante", mediaItem); showModal("Dati dell'elemento mancanti."); return; }
+
+            const itemRef = doc(db, `artifacts/${appId}/users/${userId}/userMediaArchive/${String(mediaItem.tmdbId)}`);
+            try {
+                await setDoc(itemRef, {
+                    tmdbId: String(mediaItem.tmdbId),
+                    title: mediaItem.title || 'Titolo sconosciuto',
+                    type: mediaItem.type, // 'movie' or 'tv'
+                    posterPath: mediaItem.posterPath || null,
+                    overview: mediaItem.overview || '',
+                    releaseDate: mediaItem.releaseDate || null, // Store as YYYY-MM-DD string or Firestore Timestamp
+                    rating: mediaItem.rating || 0,
+                    genres: mediaItem.genres || [], // Array of genre names
+                    addedDate: new Date() // Firestore Timestamp
+                });
+                showModal(`"${mediaItem.title}" aggiunto all'archivio!`);
+            } catch (error) {
+                console.error("Errore aggiungendo all'archivio:", error);
+                showModal("Impossibile aggiungere all'archivio: " + error.message);
+            }
+        }
+
+        async function removeFromArchive(tmdbId) {
+            if (!userId) { showModal("Autenticazione richiesta."); return; }
+            const itemRef = doc(db, `artifacts/${appId}/users/${userId}/userMediaArchive/${String(tmdbId)}`);
+            try {
+                await deleteDoc(itemRef);
+                showModal("Elemento rimosso dall'archivio.");
+                // localArchive will be updated by onSnapshot
+            } catch (error) {
+                console.error("Errore rimuovendo dall'archivio:", error);
+                showModal("Impossibile rimuovere: " + error.message);
+            }
+        }
+        
+        let archiveUnsubscribe = null; // To detach listener
+        function loadArchive() {
+            if (!userId || !db) {
+                emptyArchiveMessage.textContent = "Autenticazione in corso o Firebase non disponibile...";
+                emptyArchiveMessage.style.display = 'block';
+                loadingIndicatorArchive.style.display = 'none';
+                return;
+            }
+            loadingIndicatorArchive.style.display = 'block';
+            resultsArchiveDiv.innerHTML = '';
+            emptyArchiveMessage.style.display = 'none';
+            noResultsArchiveMessage.style.display = 'none';
+
+            const archiveCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/userMediaArchive`);
+            
+            // Detach previous listener if exists
+            if (archiveUnsubscribe) archiveUnsubscribe();
+
+            archiveUnsubscribe = onSnapshot(archiveCollectionRef, (snapshot) => {
+                localArchive = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                loadingIndicatorArchive.style.display = 'none';
+                applyFiltersAndDisplayArchive(); // Display initially or after updates
+            }, (error) => {
+                console.error("Errore caricando l'archivio: ", error);
+                errorMessageOnline.textContent = "Impossibile caricare l'archivio: " + error.message;
+                errorMessageOnline.style.display = 'block'; // Show error in online section for visibility
+                loadingIndicatorArchive.style.display = 'none';
+            });
+        }
+
+        function applyFiltersAndDisplayArchive() {
+            if (localArchive.length === 0) {
+                resultsArchiveDiv.innerHTML = '';
+                emptyArchiveMessage.style.display = 'block';
+                noResultsArchiveMessage.style.display = 'none';
+                return;
+            }
+            emptyArchiveMessage.style.display = 'none';
+
+            const titleFilter = filterArchiveTitleInput.value.toLowerCase();
+            const typeFilter = filterArchiveTypeSelect.value;
+            const genreFilter = filterArchiveGenreSelect.value;
+            const ratingFilter = parseFloat(filterArchiveRatingSelect.value) || 0;
+            const dateStartFilter = filterArchiveDateStartInput.value;
+            const dateEndFilter = filterArchiveDateEndInput.value;
+
+            const filtered = localArchive.filter(item => {
+                const itemTitle = (item.title || '').toLowerCase();
+                const itemType = item.type || '';
+                const itemGenres = item.genres || []; // Array of genre names
+                const itemRating = parseFloat(item.rating) || 0;
+                const itemReleaseDate = item.releaseDate; // Assuming YYYY-MM-DD string
+
+                if (titleFilter && !itemTitle.includes(titleFilter)) return false;
+                if (typeFilter && itemType !== typeFilter) return false;
+                if (genreFilter && !itemGenres.includes(genreFilter)) return false;
+                if (ratingFilter && itemRating < ratingFilter) return false;
+                if (dateStartFilter && itemReleaseDate && itemReleaseDate < dateStartFilter) return false;
+                if (dateEndFilter && itemReleaseDate && itemReleaseDate > dateEndFilter) return false;
+                
+                return true;
+            });
+
+            displayArchivedItems(filtered);
+        }
+        applyArchiveFiltersBtn.addEventListener('click', applyFiltersAndDisplayArchive);
+        resetArchiveFiltersBtn.addEventListener('click', () => {
+            filterArchiveTitleInput.value = '';
+            filterArchiveTypeSelect.value = '';
+            filterArchiveGenreSelect.value = '';
+            filterArchiveRatingSelect.value = '';
+            filterArchiveDateStartInput.value = '';
+            filterArchiveDateEndInput.value = '';
+            applyFiltersAndDisplayArchive();
+        });
+
+
+        function displayArchivedItems(items) {
+            resultsArchiveDiv.innerHTML = '';
+            if (items.length === 0) {
+                noResultsArchiveMessage.style.display = 'block';
+                return;
+            }
+            noResultsArchiveMessage.style.display = 'none';
+
+            items.forEach((item, index) => {
+                const posterPath = item.posterPath ? `https://image.tmdb.org/t/p/w342${item.posterPath}` : 'https://placehold.co/342x513/181818/555555?text=No+Image';
+                const card = document.createElement('div');
+                card.className = 'result-card';
+                card.style.animationDelay = `${index * 0.05}s`;
+
+                const posterOrPlaceholder = item.posterPath
+                    ? `<img src="${posterPath}" alt="${item.title}" class="card-poster-img" loading="lazy">`
+                    : `<div class="card-poster-img bg-neutral-700 flex items-center justify-center text-neutral-500 text-center p-2">${item.title}<br>(No Image)</div>`;
+
+                card.innerHTML = `
+                    ${posterOrPlaceholder}
+                    <div class="card-info">
+                        <h3 class="card-title" title="${item.title}">${item.title}</h3>
+                        <p class="card-type">${item.type === 'tv' ? 'Serie TV' : 'Film'}</p>
+                    </div>
+                    <div class="card-quick-actions">
+                        <button class="card-action-btn play-archived-btn" title="Riproduci">
+                            <i data-lucide="play-circle"></i>
+                        </button>
+                        <button class="card-action-btn remove-archive-btn" title="Rimuovi dall'Archivio">
+                            <i data-lucide="trash-2"></i>
+                        </button>
+                    </div>
+                `;
+                card.querySelector('.play-archived-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // For archived items, TMDB ID is stored as item.tmdbId or item.id (if it's the doc ID)
+                    openPlayer(item.tmdbId || item.id, item.type, item.overview, item.title, item.releaseDate, item.rating, item.posterPath, true /*isArchived*/);
+                });
+                card.querySelector('.remove-archive-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    removeFromArchive(item.tmdbId || item.id);
+                });
+                 // Main click on card also opens player
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.card-action-btn')) return;
+                    openPlayer(item.tmdbId || item.id, item.type, item.overview, item.title, item.releaseDate, item.rating, item.posterPath, true);
+                });
+                resultsArchiveDiv.appendChild(card);
+            });
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+
+
+        // --- TMDB API and Online Search Functions ---
+        async function fetchGenres() {
+            const movieGenreUrl = `https://api.themoviedb.org/3/genre/movie/list?api_key=${apiKeyTmdb}&language=it-IT`;
+            const tvGenreUrl = `https://api.themoviedb.org/3/genre/tv/list?api_key=${apiKeyTmdb}&language=it-IT`;
+            try {
+                const [movieRes, tvRes] = await Promise.all([fetch(movieGenreUrl), fetch(tvGenreUrl)]);
+                const movieData = await movieRes.json();
+                const tvData = await tvRes.json();
+                
+                const allGenres = {};
+                movieData.genres.forEach(g => allGenres[g.name] = g); // Use name as key to avoid duplicates by ID if names are same
+                tvData.genres.forEach(g => allGenres[g.name] = g);
+
+                filterArchiveGenreSelect.innerHTML = '<option value="">Tutti i Generi</option>'; // Reset
+                Object.values(allGenres).sort((a,b) => a.name.localeCompare(b.name)).forEach(genre => {
+                    genreMap[genre.id] = genre.name; // For mapping IDs to names later
+                    const option = document.createElement('option');
+                    option.value = genre.name; // Filter by name
+                    option.textContent = genre.name;
+                    filterArchiveGenreSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error("Errore caricando i generi:", error);
+            }
+        }
+
+
+        async function loadHeroContentOnline() {
+            // ... (same as previous version, ensure it calls openPlayer with isArchived = false)
+            const heroUrl = `https://api.themoviedb.org/3/trending/movie/week?api_key=${apiKeyTmdb}&language=it-IT`;
+            try {
+                const response = await fetch(heroUrl);
+                if (!response.ok) throw new Error('Failed to load trending movies');
+                const data = await response.json();
+                if (data.results && data.results.length > 0) {
+                    const popularItem = data.results[Math.floor(Math.random() * Math.min(data.results.length, 5))];
+                    currentHeroItem = popularItem;
+                    heroTitle.textContent = popularItem.title || popularItem.name;
+                    heroOverview.textContent = popularItem.overview;
+                    if (popularItem.backdrop_path) {
+                        heroSection.style.backgroundImage = `url(https://image.tmdb.org/t/p/original${popularItem.backdrop_path})`;
+                    } else if (popularItem.poster_path) {
+                         heroSection.style.backgroundImage = `url(https://image.tmdb.org/t/p/original${popularItem.poster_path})`;
+                    }
+                    heroSection.style.display = 'flex';
+                    heroSection.classList.add('fade-in-content');
+                    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+                    heroPlayButton.onclick = () => openPlayer(popularItem.id, 'movie', popularItem.overview, popularItem.title, popularItem.release_date, popularItem.vote_average, popularItem.poster_path, false);
+                    heroMoreInfoButton.onclick = () => openPlayer(popularItem.id, 'movie', popularItem.overview, popularItem.title, popularItem.release_date, popularItem.vote_average, popularItem.poster_path, false);
+                }
+            } catch (error) {
+                console.error("Error loading hero content:", error);
+                heroSection.style.display = 'none';
+            }
+        }
+        
+        function displaySkeletonLoadersOnline(count) {
+            // ... (same as previous version, targets loadingIndicatorOnline)
+            loadingIndicatorOnline.style.display = 'grid';
+            loadingIndicatorOnline.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-5 py-10';
+            let skeletonsHTML = '';
+            for (let i = 0; i < count; i++) {
+                skeletonsHTML += `<div class="skeleton-card"><div class="skeleton-poster"></div><div class="p-3"><div class="skeleton-text w-3/4"></div><div class="skeleton-text w-1/2 mt-2"></div></div></div>`;
+            }
+            loadingIndicatorOnline.innerHTML = skeletonsHTML;
+        }
+
+        function displayResultsOnline(items) {
+            // ... (modified to include "Add to Archive" button and use isArchived=false for openPlayer)
+            resultsOnlineDiv.innerHTML = '';
+            const validItems = items.filter(item => (item.media_type === 'movie' || item.media_type === 'tv') && item.id);
+            if (validItems.length === 0) { /* ... */ return; }
+
+            validItems.forEach(async (item, index) => {
+                const title = item.title || item.name || 'Titolo sconosciuto';
+                const posterPath = item.poster_path ? `https://image.tmdb.org/t/p/w342${item.poster_path}` : 'https://placehold.co/342x513/181818/555555?text=No+Image';
+                const itemType = item.media_type;
+                const itemId = item.id;
+                const overview = item.overview || '';
+                const releaseDate = item.release_date || item.first_air_date || '';
+                const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
+                const genreIds = item.genre_ids || [];
+                const genres = genreIds.map(id => genreMap[id]).filter(Boolean);
+
+
+                const card = document.createElement('div');
+                card.className = 'result-card';
+                card.style.animationDelay = `${index * 0.05}s`;
+                const posterOrPlaceholder = item.poster_path ? `<img src="${posterPath}" alt="${title}" class="card-poster-img" loading="lazy">` : `<div class="card-poster-img bg-neutral-700 flex items-center justify-center text-neutral-500 text-center p-2">${title}<br>(No Image)</div>`;
+                
+                card.innerHTML = `
+                    ${posterOrPlaceholder}
+                    <div class="card-info">
+                        <h3 class="card-title" title="${title}">${title}</h3>
+                        <p class="card-type">${itemType === 'tv' ? 'Serie TV' : 'Film'}</p>
+                    </div>
+                    <div class="card-quick-actions">
+                        <button class="card-action-btn play-online-btn" title="Riproduci">
+                            <i data-lucide="play-circle"></i>
+                        </button>
+                        <button class="card-action-btn add-archive-btn" title="Aggiungi all'Archivio">
+                            <i data-lucide="plus-circle"></i>
+                        </button>
+                        <button class="card-action-btn info-online-btn" title="Più Info">
+                             <i data-lucide="info"></i>
+                        </button>
+                    </div>
+                `;
+                
+                const mediaDataForArchive = { tmdbId: String(itemId), title, type: itemType, posterPath: item.poster_path, overview, releaseDate, rating, genres };
+
+                card.querySelector('.play-online-btn').addEventListener('click', (e) => { /* ... */ openPlayer(itemId, itemType, overview, title, releaseDate, rating, item.poster_path, false); });
+                card.querySelector('.add-archive-btn').addEventListener('click', (e) => { e.stopPropagation(); addToArchive(mediaDataForArchive); });
+                card.querySelector('.info-online-btn').addEventListener('click', (e) => { /* ... */ openPlayer(itemId, itemType, overview, title, releaseDate, rating, item.poster_path, false); });
+                card.addEventListener('click', (e) => { if (e.target.closest('.card-action-btn')) return; openPlayer(itemId, itemType, overview, title, releaseDate, rating, item.poster_path, false);});
+                
+                resultsOnlineDiv.appendChild(card);
+            });
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+        
+        // --- Player Functions (modified to handle isArchived context for back button) ---
+        let currentViewBeforePlayer = 'onlineSearchTab'; // or 'archiveTab'
+
+        async function openPlayer(id, type, overviewText = '', originalTitle = 'Dettagli non disponibili', release = '', vote = 'N/A', poster = null, isArchivedItem = false) {
+            currentViewBeforePlayer = activeTab; // Store which tab was active
+            hideActiveTabShowPlayer();
+            // ... (rest of the openPlayer logic is largely the same, ensure it fetches full details if needed, especially for archived items that might only have partial data)
+            playerContainer.innerHTML = '<div class="w-full h-full flex items-center justify-center"><svg class="animate-spin h-10 w-10 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></div>';
+            videoTitle.textContent = originalTitle;
+            videoOverview.textContent = overviewText || 'Nessuna descrizione disponibile.';
+            videoReleaseDate.textContent = release ? new Date(release).toLocaleDateString('it-IT', { year: 'numeric', month: 'long' }) : '';
+            videoRating.textContent = vote;
+
+            if (poster) {
+                playerBackdrop.style.backgroundImage = `url(https://image.tmdb.org/t/p/w1280${poster})`;
+                playerBackdrop.classList.add('active');
+            } else {
+                playerBackdrop.classList.remove('active');
+            }
+
+            seasonSelector.style.display = 'none'; episodeSelector.style.display = 'none'; seasonsDiv.innerHTML = ''; episodesDiv.innerHTML = '';
+
+            try {
+                let itemDetails = { name: originalTitle, overview: overviewText, first_air_date: release, vote_average: vote };
+                // If it's an archived item, we might already have enough details.
+                // If it's an online item, or we need more (like seasons for TV), fetch from TMDB.
+                if (type === 'tv' && (!isArchivedItem || !tvDataCacheOnline || tvDataCacheOnline.id !== id) ) { // Fetch full TV details if not cached or different show
+                     const tvUrl = `https://api.themoviedb.org/3/tv/${id}?api_key=${apiKeyTmdb}&language=it-IT&append_to_response=external_ids`;
+                     const response = await fetch(tvUrl);
+                     if (!response.ok) throw new Error(`Errore caricando dettagli serie: ${response.status}`);
+                     itemDetails = await response.json();
+                     if(!isArchivedItem) tvDataCacheOnline = itemDetails; // Cache for online items
+                } else if (type === 'movie' && !isArchivedItem && (!overviewText || !release)) { // Fetch movie details if not enough info
+                    const movieUrl = `https://api.themoviedb.org/3/movie/${id}?api_key=${apiKeyTmdb}&language=it-IT`;
+                    const response = await fetch(movieUrl);
+                    if (!response.ok) throw new Error(`Errore caricando dettagli film: ${response.status}`);
+                    itemDetails = await response.json();
+                }
+
+
+                videoTitle.textContent = itemDetails.name || itemDetails.title || originalTitle;
+                videoOverview.textContent = itemDetails.overview || overviewText || 'Nessuna descrizione disponibile.';
+                const itemRelease = itemDetails.first_air_date || itemDetails.release_date || release;
+                videoReleaseDate.textContent = itemRelease ? new Date(itemRelease).toLocaleDateString('it-IT', { year: 'numeric', month: 'long' }) : '';
+                videoRating.textContent = itemDetails.vote_average ? itemDetails.vote_average.toFixed(1) : vote;
+
+
+                if (type === 'movie') {
+                    const embedUrl = `https://vixsrc.to/movie/${id}?autoplay=1&primaryColor=e50914`;
+                    playerContainer.innerHTML = `<iframe src="${embedUrl}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" allowfullscreen class="w-full h-full border-0 rounded-lg"></iframe>`;
+                } else if (type === 'tv') {
+                    // Use itemDetails (which could be from cache or fresh fetch)
+                    displaySeasonButtons(itemDetails.seasons, id, itemDetails.seasons?.find(s => s.season_number > 0)?.season_number || 1, itemDetails);
+                    await loadEpisodeForTV(id, itemDetails.seasons?.find(s => s.season_number > 0)?.season_number || 1, 1, itemDetails);
+                }
+            } catch (err) { /* ... */ } finally { /* ... */ if (typeof lucide !== 'undefined') lucide.createIcons(); }
+        }
+
+        function displaySeasonButtons(seasonsData, tvId, activeSeasonNumber, tvShowDetails) {
+            if (!seasonsData || seasonsData.length === 0) { seasonSelector.style.display = 'none'; return; }
+            seasonsDiv.innerHTML = '';
+            const displayableSeasons = seasonsData.filter(s => s.episode_count > 0 && (s.season_number > 0 || seasonsData.filter(sx => sx.season_number > 0).length === 0) );
+            displayableSeasons.forEach(s => { /* ... */ btn.addEventListener('click', async () => { /* ... */ await loadEpisodeForTV(tvId, s.season_number, 1, tvShowDetails); }); seasonsDiv.appendChild(btn); });
+            seasonSelector.style.display = displayableSeasons.length > 0 ? 'block' : 'none';
+        }
+
+        async function loadEpisodeForTV(tvId, seasonNumber, episodeNumber, tvShowDetails) {
+            const embedUrl = `https://vixsrc.to/tv/${tvId}/${seasonNumber}/${episodeNumber}?autoplay=1&primaryColor=e50914`;
+            playerContainer.innerHTML = `<iframe src="${embedUrl}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" allowfullscreen class="w-full h-full border-0 rounded-lg"></iframe>`;
+            if (tvShowDetails && tvShowDetails.seasons) {
+                const currentSeasonData = tvShowDetails.seasons.find(s => s.season_number === seasonNumber);
+                if (currentSeasonData && currentSeasonData.episode_count > 0) {
+                    displayEpisodeButtons(currentSeasonData.episode_count, tvId, seasonNumber, episodeNumber, tvShowDetails);
+                } else { episodeSelector.style.display = 'none'; }
+            }
+            // ... (update active season button)
+        }
+
+        function displayEpisodeButtons(episodeCount, tvId, seasonNumber, activeEpisodeNumber, tvShowDetails) {
+            episodesDiv.innerHTML = '';
+            if (episodeCount === 0) { episodeSelector.style.display = 'none'; return; }
+            for (let e = 1; e <= episodeCount; e++) { /* ... */ btn.addEventListener('click', async () => { /* ... */ await loadEpisodeForTV(tvId, seasonNumber, e, tvShowDetails); }); episodesDiv.appendChild(btn); }
+            episodeSelector.style.display = 'block';
+        }
+
+        // --- UI State Changers ---
+        function hideActiveTabShowPlayer() {
+            document.getElementById(activeTab)?.classList.remove('active');
+            playerSection.style.display = 'block';
+            heroSection.style.display = 'none'; // Always hide hero when player is up
+        }
+
+        function hidePlayerShowActiveTab() {
+            playerSection.style.display = 'none';
+            document.getElementById(activeTab)?.classList.add('active');
+            playerBackdrop.classList.remove('active');
+            // Show hero only if on online search tab AND no active search query
+            if (activeTab === 'onlineSearchTab' && !searchQueryOnlineInput.value.trim() && currentHeroItem) {
+                heroSection.style.display = 'flex';
+            } else {
+                heroSection.style.display = 'none';
+            }
+        }
+        
+        // --- Initialization and Event Listeners ---
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('currentYear').textContent = new Date().getFullYear();
+            if (typeof lucide !== 'undefined') lucide.createIcons(); else console.error("Lucide not ready at DOMContentLoaded");
+
+            // Wait for Firebase Auth to be ready
+            document.addEventListener('authReady', (event) => {
+                userId = event.detail.userId;
+                console.log("Auth ready, User ID:", userId);
+                initializeApp(); // Now safe to initialize parts that depend on userId
+            });
+
+
+            async function initializeApp() {
+                await fetchGenres(); // Fetch genres for filter dropdown
+                if (activeTab === 'onlineSearchTab') { // Load hero only if online tab is initially active
+                    await loadHeroContentOnline();
+                }
+                if (activeTab === 'archiveTab') { // Load archive if it's the active tab
+                    loadArchive();
+                }
+                // Initial call to render icons for any static elements
+                if (typeof lucide !== 'undefined') {
+                    lucide.createIcons();
+                }
+            }
+
+
+            window.addEventListener('scroll', () => { /* ... (header style change) ... */ });
+
+            searchFormOnline.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const query = searchQueryOnlineInput.value.trim();
+                if (!query) return;
+                // UI updates for online search
+                heroSection.style.display = 'none';
+                resultsOnlineDiv.innerHTML = '';
+                resultsTitleOnlineDiv.style.display = 'block';
+                resultsTitleOnlineDiv.textContent = `Risultati per "${query}"`;
+                errorMessageOnline.style.display = 'none';
+                displaySkeletonLoadersOnline(6);
+
+                const url = `https://api.themoviedb.org/3/search/multi?api_key=${apiKeyTmdb}&language=it-IT&query=${encodeURIComponent(query)}&include_adult=false`;
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`Errore HTTP: ${response.status}`);
+                    const data = await response.json();
+                    loadingIndicatorOnline.style.display = 'none';
+                    resultsOnlineDiv.innerHTML = '';
+                    if (data.results && data.results.length > 0) {
+                        displayResultsOnline(data.results);
+                    } else { /* ... (no results message) ... */ }
+                } catch (err) { /* ... (error handling) ... */ }
+            });
+
+            backToViewBtn.addEventListener('click', () => {
+                hidePlayerShowActiveTab();
+                playerContainer.innerHTML = '';
+                videoOverview.textContent = '';
+            });
+        });
+    </script>
+</body>
+</html>
